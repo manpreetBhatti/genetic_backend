@@ -16,26 +16,9 @@ import random
 import numpy as np
 import time
 import pymongo
+from send_email import SendEmail
+import json
 
-fashion_mnist = tf.keras.datasets.fashion_mnist
-
-(train_images, train_labels), (test_images, test_labels) = fashion_mnist.load_data()
-train_images = train_images / 255.0
-
-test_images = test_images / 255.0
-
-train_images = train_images.reshape(60000, 784)
-test_images = test_images.reshape(10000, 784)
-
-model = tf.keras.Sequential([
-    tf.keras.layers.Flatten(input_shape=(28, 28)),
-    tf.keras.layers.Dense(128, activation='relu'),
-    tf.keras.layers.Dense(10)
-])
-
-model.compile(optimizer='adam',
-              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-              metrics=['accuracy'])
 
 mongoClient = pymongo.MongoClient("mongodb://localhost:27017/")
 mongo_db = mongoClient["ml_app"]
@@ -49,9 +32,12 @@ def Convert(lst):
 
 
 class GeneticAlgorithm():
-    def __init__(self, population_size=20, enableDropout=False, debug=False, userEmailId='manpreetignite@gmail.com'):
-        self.input_size = 784
-        self.output_size = 10
+    def __init__(self, userEmailId='manpreetignite@gmail.com', train_data=[], test_data=[], test_labels=[], train_labels=[], inputneuron=0, outputneuron=0):
+        population_size = 5
+        enableDropout = False
+        debug = False
+        self.input_size = int(inputneuron)
+        self.output_size = int(outputneuron)
         self.activation_functions = ["relu", "sigmoid", "tanh"]
         if population_size < 4:
             print("Minimum population size 4")
@@ -67,17 +53,22 @@ class GeneticAlgorithm():
         self.num_parents_mating = int(self.sol_per_pop / 2)
         if self.num_parents_mating % 2 != 0:
             self.num_parents_mating -= 1
-        self.num_generations = 5
+        self.num_generations = 1
         self.mutation_percent = 20
-        self.epochs_per_sol = 5
+        self.epochs_per_sol = 2
         self.debug = debug
         self.training_logs = {}
         self.initialisePopulation()
         self.new_population = []
         self.save_progress = []
+        self.train_data = train_data
+        self.test_data = test_data
+        self.test_labels = test_labels
+        self.train_labels = train_labels
 
     def getRandomActivationFunction(self):
-        chooseActivation = random.randint(0, len(self.activation_functions) - 1)
+        chooseActivation = random.randint(
+            0, len(self.activation_functions) - 1)
         return self.activation_functions[chooseActivation]
 
     def initialisePopulation(self):
@@ -85,12 +76,14 @@ class GeneticAlgorithm():
         for i in range(self.sol_per_pop):
             self.activation_function_list[i] = []
             model = Sequential()
-            model.add(Dense(random.randint(2, self.maxHiddenNodes), input_dim=self.input_size, activation='relu'))
+            model.add(Dense(random.randint(2, self.maxHiddenNodes),
+                            input_dim=self.input_size, activation='relu'))
             self.activation_function_list[i] = ["relu"]
             for j in range(random.randint(1, self.maxNumberOfLayers)):
                 activation_function = self.getRandomActivationFunction()
                 self.activation_function_list[i].append(activation_function)
-                model.add(Dense(random.randint(2, self.maxHiddenNodes), activation=activation_function))
+                model.add(Dense(random.randint(2, self.maxHiddenNodes),
+                                activation=activation_function))
             if self.enableDropout:
                 model.add(Dropout(random.randint(1, 5) / 10))
             model.add(Dense(self.output_size, activation="sigmoid"))
@@ -124,19 +117,23 @@ class GeneticAlgorithm():
             for layer_idx in range(mat_pop_weights.shape[1]):
                 end = end + mat_pop_weights[sol_idx, layer_idx].size
                 curr_vector = vector_pop_weights[sol_idx, start:end]
-                mat_layer_weights = np.reshape(curr_vector, newshape=(mat_pop_weights[sol_idx, layer_idx].shape))
+                mat_layer_weights = np.reshape(curr_vector, newshape=(
+                    mat_pop_weights[sol_idx, layer_idx].shape))
                 mat_weights.append(mat_layer_weights)
                 start = end
         return np.reshape(mat_weights, newshape=mat_pop_weights.shape)
 
     def mutation(self, offspring_crossover, mutation_percent):
-        num_mutations = np.uint32((mutation_percent * offspring_crossover.shape[1]) / 100)
-        mutation_indices = np.array(random.sample(range(0, offspring_crossover.shape[1]), num_mutations))
+        num_mutations = np.uint32(
+            (mutation_percent * offspring_crossover.shape[1]) / 100)
+        mutation_indices = np.array(random.sample(
+            range(0, offspring_crossover.shape[1]), num_mutations))
         # Mutation changes a single gene in each offspring randomly.
         for idx in range(offspring_crossover.shape[0]):
             # The random value to be added to the gene.
             random_value = np.random.uniform(-1.0, 1.0, 1)
-            offspring_crossover[idx, mutation_indices] = offspring_crossover[idx, mutation_indices] + random_value
+            offspring_crossover[idx, mutation_indices] = offspring_crossover[idx,
+                                                                             mutation_indices] + random_value
         return offspring_crossover
 
     def reorganise_parameters(self, p1, p2, u_id):
@@ -146,7 +143,8 @@ class GeneticAlgorithm():
         unit_id_next = "layer_" + str(u_id + 1) + "_unit"
         weight_id = "layer_" + str(u_id + 1) + "_weight"
         bias_id = "layer_" + str(u_id) + "_bias"
-        offspring_n_unit = min(parent1["units"][unit_id], parent2["units"][unit_id])
+        offspring_n_unit = min(
+            parent1["units"][unit_id], parent2["units"][unit_id])
         # print(f"-------------Before----------------")
         # print(np.array(parent1["weights"][weight_id]).shape)
         # print(np.array(parent2["weights"][weight_id]).shape)
@@ -157,7 +155,8 @@ class GeneticAlgorithm():
         temp = parent2["weights"][weight_id][:offspring_n_unit]
         parent2["weights"][weight_id] = temp
         # take smallest number of units
-        next_min = min(parent1["units"][unit_id_next], parent2["units"][unit_id_next])
+        next_min = min(parent1["units"][unit_id_next],
+                       parent2["units"][unit_id_next])
         if (np.array(parent1["weights"][weight_id]).shape[1] > next_min):
             temp = []
             for i in range(len(parent1["weights"][weight_id])):
@@ -294,7 +293,8 @@ class GeneticAlgorithm():
         temp_training_logs = {}
         for log in range(len(self.training_logs)):
             accuracy_dict[log] = self.training_logs[log]["accuracy"]
-        accuracy_dict = dict(sorted(accuracy_dict.items(), key=lambda item: item[1], reverse=True))
+        accuracy_dict = dict(sorted(accuracy_dict.items(),
+                                    key=lambda item: item[1], reverse=True))
         i = 0
         for a in accuracy_dict.keys():
             temp_training_logs[i] = self.training_logs[a]
@@ -304,13 +304,16 @@ class GeneticAlgorithm():
     def trainIndividual(self, individualId):
         log = {}
 
-        print(f"-------------Training Parent {individualId + 1} / {len(self.population)}----------------")
+        print(
+            f"-------------Training Parent {individualId + 1} / {len(self.population)}----------------")
         self.population[individualId].compile(optimizer='adam',
-                                              loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+                                              loss=tf.keras.losses.SparseCategoricalCrossentropy(
+                                                  from_logits=True),
                                               metrics=['accuracy'])
-        history = self.population[individualId].fit(train_images, train_labels, epochs=self.epochs_per_sol,
-                                                    validation_data=(test_images, test_labels))
-        log["accuracy"] = history.history["accuracy"][0]
+        history = self.population[individualId].fit(self.train_data, self.train_labels, epochs=self.epochs_per_sol,
+                                                    validation_data=(self.test_data, self.test_labels))
+        log["accuracy"] = history.history["accuracy"][len(
+            history.history["accuracy"]) - 1]
         log["parentID"] = individualId + 1
         log["units"] = {}
         log["weights"] = {}
@@ -319,8 +322,10 @@ class GeneticAlgorithm():
         log["layers"] = self.population[individualId].layers  # Can maybe remove
 
         for layer in range(len(log["layers"])):
-            log["weights"]["layer_" + str(layer) + "_weight"] = log["layers"][layer].weights[0].numpy()
-            log["units"]["layer_" + str(layer) + "_unit"] = log["layers"][layer].units
+            log["weights"]["layer_" +
+                           str(layer) + "_weight"] = log["layers"][layer].weights[0].numpy()
+            log["units"]["layer_" + str(layer) +
+                         "_unit"] = log["layers"][layer].units
             # log["bias"]["layer_"+str(layer)+"_bias"] = log["layers"][layer].bias.numpy()
         self.training_logs[len(self.training_logs)] = log
         self.save_progress.append({
@@ -340,22 +345,36 @@ class GeneticAlgorithm():
         # print(self.training_logs[len(self.training_logs) - 1])
 
     def result(self):
-        best = self.select_mating_pool()[0]
-        selected_model = self.population[best["parentID"] - 1]
-        print("Best accuracy:")
-        print(best["accuracy"])
-        print("Best architecture:")
-        print(selected_model.to_json())
+        best = self.training_logs[0]
+
+        selected_model = next(
+            (item for item in self.save_progress if item["parentID"] == best["parentID"]), None)
+
         collection.update_one({
             "email": self.userEmailId
         }, {
             "$set": {
                 "status": "done",
                 "state_uptil_now": self.save_progress,
-                "best_architecture": selected_model.to_json(),
+                "best_architecture": selected_model['architecture'],
                 "best_accuracy": best["accuracy"]
             }
         })
+
+        for index in best["weights"]:
+            temp = np.array(best["weights"][index])
+            best["weights"][index] = temp.tolist()
+
+        accuracy = str(best["accuracy"])
+        email_body = "Hey! \n\n Please find the best architecture we found for the dataset you uploaded. \n\n"
+        email_body = email_body+"The best accuracy that we got was \n"+accuracy+'\n\n'
+        email_body = email_body+"The architecture of the model has the following details \n" + \
+            selected_model['architecture']
+        email_body = email_body+"\n\nThe weights are as follows:\n" + \
+            json.dumps(best['weights'])
+
+        email = SendEmail(email_body, self.userEmailId)
+        email.send_email()
 
     def train(self):
         collection.find_one_and_update({
@@ -380,12 +399,15 @@ class GeneticAlgorithm():
                     self.crossover(i, i + 1)
             i = 0
             while (len(self.new_population) < self.sol_per_pop):
-                self.new_population.append(self.population[self.training_logs[i]["parentID"] - 1])
-                self.activation_function_list[len(self.activation_function_list)] = self.training_logs[i]["activation"]
+                self.new_population.append(
+                    self.population[self.training_logs[i]["parentID"] - 1])
+                self.activation_function_list[len(
+                    self.activation_function_list)] = self.training_logs[i]["activation"]
                 i += 1
             self.population = self.new_population
             self.new_population = []
-            print(f"Generation Training time:{(time.time() - start_time) / 60} minutes")
+            print(
+                f"Generation Training time:{(time.time() - start_time) / 60} minutes")
             # for log in range(len(self.training_logs)):
             #   print(self.training_logs[log])
         self.result()
